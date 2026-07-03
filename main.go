@@ -1,15 +1,23 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync/atomic"
+
+	"github.com/KayraBulbul/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	dbQueries      *database.Queries
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -92,18 +100,43 @@ func validateChirp() http.Handler {
 		if len(params.Body) > 140 {
 			respondWithError(w, 400, "Chirp is too long")
 		} else {
+			words := strings.Split(params.Body, " ")
+
+			for i, word := range words {
+				switch strings.ToLower(word) {
+				case "kerfuffle":
+					fallthrough
+				case "sharbert":
+					fallthrough
+				case "fornax":
+					words[i] = "****"
+				}
+				continue
+			}
+
 			type returnVals struct {
-				Valid bool `json:"valid"`
+				CleanedBody string `json:"cleaned_body"`
 			}
 			respBody := returnVals{
-				Valid: true,
+				CleanedBody: strings.Join(words, " "),
 			}
 			respondWithJSON(w, 200, respBody)
+
 		}
 	})
 }
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading environment file")
+	}
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatal("Error opening database")
+	}
+
 	serverMux := http.NewServeMux()
 
 	h1 := func(w http.ResponseWriter, req *http.Request) {
@@ -115,7 +148,8 @@ func main() {
 		}
 	}
 
-	apiCfg := &apiConfig{}
+	dbQueries := database.New(db)
+	apiCfg := &apiConfig{dbQueries: dbQueries}
 
 	serverMux.HandleFunc("GET /api/healthz", h1)
 	serverMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
@@ -128,7 +162,7 @@ func main() {
 		Handler: serverMux,
 	}
 
-	err := server.ListenAndServe()
+	err = server.ListenAndServe()
 	if err != nil {
 		log.Fatal("Listen and server error")
 	}
