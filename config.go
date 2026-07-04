@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/KayraBulbul/chirpy/internal/database"
+	"github.com/google/uuid"
 )
 
 type apiConfig struct {
@@ -52,5 +56,128 @@ func (cfg *apiConfig) reset() http.Handler {
 			w.WriteHeader(403)
 			return
 		}
+	})
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
+
+func (cfg *apiConfig) createChirp() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type reqParams struct {
+			Body   string    `json:"body"`
+			UserID uuid.UUID `json:"user_id"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := reqParams{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		if len(params.Body) > 140 {
+			respondWithError(w, 400, "Chirp is too long")
+		} else {
+			words := strings.Split(params.Body, " ")
+
+			for i, word := range words {
+				switch strings.ToLower(word) {
+				case "kerfuffle":
+					fallthrough
+				case "sharbert":
+					fallthrough
+				case "fornax":
+					words[i] = "****"
+				}
+				continue
+			}
+			resParams := database.CreateChirpParams{
+				Body:   strings.Join(words, " "),
+				UserID: params.UserID,
+			}
+
+			chirp, err := cfg.dbQueries.CreateChirp(r.Context(), resParams)
+			if err != nil {
+				log.Printf("Error creating chirp: %s", err)
+				w.WriteHeader(500)
+				return
+			}
+			respondWithJSON(w, 201, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+		}
+	})
+}
+
+func (cfg *apiConfig) getChirps() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dbChirps, err := cfg.dbQueries.GetChrips(r.Context())
+		if err != nil {
+			log.Printf("Error retrieving chirps from db: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		chirps := []Chirp{}
+		for _, chirp := range dbChirps {
+			chirps = append(chirps, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+		}
+
+		respondWithJSON(w, 200, chirps)
+	})
+}
+
+func (cfg *apiConfig) getChirpByID() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idString := r.PathValue("chirpID")
+		id, err := uuid.Parse(idString)
+		if err != nil {
+			log.Printf("Error parsing id: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		chirp, err := cfg.dbQueries.GetChirpById(r.Context(), id)
+		if err != nil {
+			w.WriteHeader(404)
+			return
+		}
+		respondWithJSON(w, 200, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+	})
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+func (cfg *apiConfig) createUser() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type parameters struct {
+			Email string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		user, err := cfg.dbQueries.CreateUser(r.Context(), params.Email)
+		if err != nil {
+			log.Printf("Error creating user: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email})
 	})
 }
