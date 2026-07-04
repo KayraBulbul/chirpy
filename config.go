@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
 
 	"github.com/KayraBulbul/chirpy/internal/database"
@@ -12,6 +13,11 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
+	PLATFORM       string
+}
+
+func (cfg *apiConfig) readPlatform() {
+	cfg.PLATFORM = os.Getenv("PLATFORM")
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -31,8 +37,20 @@ func (cfg *apiConfig) getHits() http.Handler {
 	})
 }
 
-func (cfg *apiConfig) resetHits() http.Handler {
+func (cfg *apiConfig) reset() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Store(0)
+		cfg.readPlatform()
+		if cfg.PLATFORM == "dev" {
+			err := cfg.dbQueries.DeleteUsers(r.Context())
+			if err != nil {
+				w.WriteHeader(500)
+				return
+			}
+			w.WriteHeader(200)
+			return
+		} else {
+			w.WriteHeader(403)
+			return
+		}
 	})
 }

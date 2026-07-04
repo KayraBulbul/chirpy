@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/KayraBulbul/chirpy/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -96,6 +98,38 @@ func validateChirp() http.Handler {
 	})
 }
 
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+func createUser(apiCfg *apiConfig) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type parameters struct {
+			Email string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := parameters{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			log.Printf("Error decoding parameters: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+
+		user, err := apiCfg.dbQueries.CreateUser(r.Context(), params.Email)
+		if err != nil {
+			log.Printf("Error creating user: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email})
+	})
+}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -124,9 +158,9 @@ func main() {
 	serverMux.HandleFunc("GET /api/healthz", h1)
 	serverMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	serverMux.Handle("GET /admin/metrics", apiCfg.getHits())
-	serverMux.Handle("POST /admin/reset", apiCfg.resetHits())
+	serverMux.Handle("POST /admin/reset", apiCfg.reset())
 	serverMux.Handle("POST /api/validate_chirp", validateChirp())
-	serverMux.Handle("POST /api/users")
+	serverMux.Handle("POST /api/users", createUser(apiCfg))
 
 	server := http.Server{
 		Addr:    ":8080",
