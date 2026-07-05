@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/KayraBulbul/chirpy/internal/auth"
 	"github.com/KayraBulbul/chirpy/internal/database"
 	"github.com/google/uuid"
 )
@@ -160,24 +161,70 @@ type User struct {
 func (cfg *apiConfig) createUser() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
-			Email string `json:"email"`
+			Password string `json:"password"`
+			Email    string `json:"email"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
 		err := decoder.Decode(&params)
 		if err != nil {
-			log.Printf("Error decoding parameters: %s", err)
-			w.WriteHeader(500)
-			return
+			respondWithError(w, 500, "Error decoding createUser request body")
 		}
 
-		user, err := cfg.dbQueries.CreateUser(r.Context(), params.Email)
+		hashedPassword, err := auth.HashPassword(params.Password)
 		if err != nil {
-			log.Printf("Error creating user: %s", err)
-			w.WriteHeader(500)
+			respondWithError(w, 500, "Error hashing password")
+		}
+
+		userParams := database.CreateUserParams{
+			Email:          params.Email,
+			HashedPassword: hashedPassword,
+		}
+
+		user, err := cfg.dbQueries.CreateUser(r.Context(), userParams)
+		if err != nil {
+			log.Printf("createUser error: %v", err)
+			respondWithError(w, 500, "Error creating user")
 			return
 		}
 		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email})
+	})
+}
+
+func (cfg *apiConfig) login() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type requestParams struct {
+			Password string `json:"password"`
+			Email    string `json:"email"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := requestParams{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			respondWithError(w, 500, "Error decoding login request body")
+		}
+
+		user, err := cfg.dbQueries.GetUserByEmail(r.Context(), params.Email)
+		if err != nil {
+			respondWithError(w, 401, "Unauthorized")
+		}
+
+		match, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
+		if err != nil {
+			respondWithError(w, 500, "Error checking password match")
+		}
+
+		if !match {
+			respondWithError(w, 401, "Unauthorized")
+		} else {
+			respondWithJSON(w, 200, User{
+				ID:        user.ID,
+				CreatedAt: user.CreatedAt,
+				UpdatedAt: user.UpdatedAt,
+				Email:     user.Email,
+			})
+		}
 	})
 }

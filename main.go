@@ -76,11 +76,15 @@ func main() {
 	dbQueries := database.New(db)
 	apiCfg := &apiConfig{dbQueries: dbQueries}
 
-	serverMux.HandleFunc("GET /api/healthz", h1)
 	serverMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	serverMux.Handle("GET /admin/metrics", apiCfg.getHits())
 	serverMux.Handle("POST /admin/reset", apiCfg.reset())
+
 	serverMux.Handle("POST /api/users", apiCfg.createUser())
+	serverMux.Handle("POST /api/login", apiCfg.login())
+
+	serverMux.HandleFunc("GET /api/healthz", h1)
+
 	serverMux.Handle("POST /api/chirps", apiCfg.createChirp())
 	serverMux.Handle("GET /api/chirps", apiCfg.getChirps())
 	serverMux.Handle("GET /api/chirps/{chirpID}", apiCfg.getChirpByID())
