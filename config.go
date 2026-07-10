@@ -18,11 +18,12 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	dbQueries      *database.Queries
-	PLATFORM       string
+	platform       string
+	secret         string
 }
 
 func (cfg *apiConfig) readPlatform() {
-	cfg.PLATFORM = os.Getenv("PLATFORM")
+	cfg.platform = os.Getenv("PLATFORM")
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -45,7 +46,7 @@ func (cfg *apiConfig) getHits() http.Handler {
 func (cfg *apiConfig) reset() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.readPlatform()
-		if cfg.PLATFORM == "dev" {
+		if cfg.platform == "dev" {
 			err := cfg.dbQueries.DeleteUsers(r.Context())
 			if err != nil {
 				w.WriteHeader(500)
@@ -71,17 +72,23 @@ type Chirp struct {
 func (cfg *apiConfig) createChirp() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type reqParams struct {
-			Body   string    `json:"body"`
-			UserID uuid.UUID `json:"user_id"`
+			Body string `json:"body"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
 		params := reqParams{}
 		err := decoder.Decode(&params)
 		if err != nil {
-			log.Printf("Error decoding parameters: %s", err)
-			w.WriteHeader(500)
-			return
+			respondWithError(w, 500, "Error decoding createChrip body")
+		}
+
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 500, "Error getting bearer token")
+		}
+		id, err := auth.ValidateJWT(token, cfg.secret)
+		if err != nil {
+			respondWithError(w, 401, "Unauthorized")
 		}
 
 		if len(params.Body) > 140 {
@@ -102,16 +109,14 @@ func (cfg *apiConfig) createChirp() http.Handler {
 			}
 			resParams := database.CreateChirpParams{
 				Body:   strings.Join(words, " "),
-				UserID: params.UserID,
+				UserID: id,
 			}
 
 			chirp, err := cfg.dbQueries.CreateChirp(r.Context(), resParams)
 			if err != nil {
-				log.Printf("Error creating chirp: %s", err)
-				w.WriteHeader(500)
-				return
+				respondWithError(w, 500, "Error creating chirp")
 			}
-			respondWithJSON(w, 201, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+			respondWithJSON(w, 201, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, id})
 		}
 	})
 }
@@ -156,13 +161,15 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 func (cfg *apiConfig) createUser() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
-			Password string `json:"password"`
-			Email    string `json:"email"`
+			Password  string `json:"password"`
+			Email     string `json:"email"`
+			ExpiresIn int    `json:"expires_in_seconds"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -188,15 +195,30 @@ func (cfg *apiConfig) createUser() http.Handler {
 			respondWithError(w, 500, "Error creating user")
 			return
 		}
-		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email})
+		expiry := ""
+		if params.ExpiresIn > 0 {
+			expiry = fmt.Sprintf("%ds", params.ExpiresIn)
+		} else {
+			expiry = "1h"
+		}
+		duration, err := time.ParseDuration(expiry)
+		if err != nil {
+			respondWithError(w, 500, "Error parsing duration")
+		}
+		token, err := auth.MakeJWT(user.ID, cfg.secret, duration)
+		if err != nil {
+			respondWithError(w, 500, "Error making JWT token")
+		}
+		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email, token})
 	})
 }
 
 func (cfg *apiConfig) login() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type requestParams struct {
-			Password string `json:"password"`
-			Email    string `json:"email"`
+			Password  string `json:"password"`
+			Email     string `json:"email"`
+			ExpiresIn int    `json:"expires_in_seconds"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -208,7 +230,7 @@ func (cfg *apiConfig) login() http.Handler {
 
 		user, err := cfg.dbQueries.GetUserByEmail(r.Context(), params.Email)
 		if err != nil {
-			respondWithError(w, 401, "Unauthorized")
+			respondWithError(w, 401, "Error getting user from database")
 		}
 
 		match, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
@@ -219,11 +241,28 @@ func (cfg *apiConfig) login() http.Handler {
 		if !match {
 			respondWithError(w, 401, "Unauthorized")
 		} else {
+			// Expiry duration either input in seconds or default to 1h
+			expiry := ""
+			if params.ExpiresIn > 0 {
+				expiry = fmt.Sprintf("%ds", params.ExpiresIn)
+			} else {
+				expiry = "1h"
+			}
+			duration, err := time.ParseDuration(expiry)
+			if err != nil {
+				respondWithError(w, 500, "Error parsing expiry")
+			}
+
+			token, err := auth.MakeJWT(user.ID, cfg.secret, duration)
+			if err != nil {
+				respondWithError(w, 500, "Error making JWT token")
+			}
 			respondWithJSON(w, 200, User{
 				ID:        user.ID,
 				CreatedAt: user.CreatedAt,
 				UpdatedAt: user.UpdatedAt,
 				Email:     user.Email,
+				Token:     token,
 			})
 		}
 	})

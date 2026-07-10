@@ -61,6 +61,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Error opening database")
 	}
+	secret := os.Getenv("SECRET")
 
 	serverMux := http.NewServeMux()
 
@@ -74,7 +75,7 @@ func main() {
 	}
 
 	dbQueries := database.New(db)
-	apiCfg := &apiConfig{dbQueries: dbQueries}
+	apiCfg := &apiConfig{dbQueries: dbQueries, secret: secret}
 
 	serverMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	serverMux.Handle("GET /admin/metrics", apiCfg.getHits())
@@ -82,10 +83,10 @@ func main() {
 
 	serverMux.Handle("POST /api/users", apiCfg.createUser())
 	serverMux.Handle("POST /api/login", apiCfg.login())
+	serverMux.Handle("POST /api/chirps", apiCfg.createChirp())
 
 	serverMux.HandleFunc("GET /api/healthz", h1)
 
-	serverMux.Handle("POST /api/chirps", apiCfg.createChirp())
 	serverMux.Handle("GET /api/chirps", apiCfg.getChirps())
 	serverMux.Handle("GET /api/chirps/{chirpID}", apiCfg.getChirpByID())
 
