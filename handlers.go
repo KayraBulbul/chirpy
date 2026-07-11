@@ -161,15 +161,13 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
-	Token     string    `json:"token"`
 }
 
 func (cfg *apiConfig) createUser() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
-			Password  string `json:"password"`
-			Email     string `json:"email"`
-			ExpiresIn int    `json:"expires_in_seconds"`
+			Password string `json:"password"`
+			Email    string `json:"email"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -195,30 +193,20 @@ func (cfg *apiConfig) createUser() http.Handler {
 			respondWithError(w, 500, "Error creating user")
 			return
 		}
-		expiry := ""
-		if params.ExpiresIn > 0 {
-			expiry = fmt.Sprintf("%ds", params.ExpiresIn)
-		} else {
-			expiry = "1h"
-		}
-		duration, err := time.ParseDuration(expiry)
-		if err != nil {
-			respondWithError(w, 500, "Error parsing duration")
-		}
-		token, err := auth.MakeJWT(user.ID, cfg.secret, duration)
-		if err != nil {
-			respondWithError(w, 500, "Error making JWT token")
-		}
-		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email, token})
+		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email})
 	})
 }
 
 func (cfg *apiConfig) login() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		type requestParams struct {
-			Password  string `json:"password"`
-			Email     string `json:"email"`
-			ExpiresIn int    `json:"expires_in_seconds"`
+			Password string `json:"password"`
+			Email    string `json:"email"`
+		}
+		type response struct {
+			User
+			Token        string `json:"token"`
+			RefreshToken string `json:"refresh_token"`
 		}
 
 		decoder := json.NewDecoder(r.Body)
@@ -241,29 +229,71 @@ func (cfg *apiConfig) login() http.Handler {
 		if !match {
 			respondWithError(w, 401, "Unauthorized")
 		} else {
-			// Expiry duration either input in seconds or default to 1h
-			expiry := ""
-			if params.ExpiresIn > 0 {
-				expiry = fmt.Sprintf("%ds", params.ExpiresIn)
-			} else {
-				expiry = "1h"
-			}
-			duration, err := time.ParseDuration(expiry)
-			if err != nil {
-				respondWithError(w, 500, "Error parsing expiry")
-			}
-
-			token, err := auth.MakeJWT(user.ID, cfg.secret, duration)
+			token, err := auth.MakeJWT(user.ID, cfg.secret, time.Hour)
 			if err != nil {
 				respondWithError(w, 500, "Error making JWT token")
 			}
-			respondWithJSON(w, 200, User{
-				ID:        user.ID,
-				CreatedAt: user.CreatedAt,
-				UpdatedAt: user.UpdatedAt,
-				Email:     user.Email,
-				Token:     token,
+			refreshToken := auth.MakeRefreshToken()
+			refreshParams := database.CreateRefreshTokenParams{
+				Token:  refreshToken,
+				UserID: user.ID,
+			}
+			_, err = cfg.dbQueries.CreateRefreshToken(r.Context(), refreshParams)
+			if err != nil {
+				respondWithError(w, 500, "Error creating refresh token in database")
+			}
+			respondWithJSON(w, 200, response{
+				User: User{
+					ID:        user.ID,
+					CreatedAt: user.CreatedAt,
+					UpdatedAt: user.UpdatedAt,
+					Email:     user.Email,
+				},
+				Token:        token,
+				RefreshToken: refreshToken,
 			})
 		}
+	})
+}
+
+func (cfg *apiConfig) validateRefresh() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type response struct {
+			Token string `json:"token"`
+		}
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 500, "Error getting bearer token")
+		}
+		refreshToken, err := cfg.dbQueries.GetRefreshByToken(r.Context(), token)
+		if err != nil {
+			respondWithError(w, 401, "Refresh token doesn't exist")
+		}
+		if refreshToken.RevokedAt.Valid {
+			respondWithError(w, 401, "Refresh token has been revoked")
+		}
+		accessToken, err := auth.MakeJWT(refreshToken.UserID, cfg.secret, time.Hour)
+		if err != nil {
+			respondWithError(w, 500, "Error making JWT token")
+		}
+		respondWithJSON(w, 200, response{Token: accessToken})
+	})
+}
+
+func (cfg *apiConfig) revokeRefresh() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 500, "Error getting bearer token")
+		}
+		refreshToken, err := cfg.dbQueries.GetRefreshByToken(r.Context(), token)
+		if err != nil {
+			respondWithError(w, 401, "Refresh token doesn't exist")
+		}
+		err = cfg.dbQueries.RevokeRefreshToken(r.Context(), refreshToken.Token)
+		if err != nil {
+			respondWithError(w, 500, "Error revoking refresh token")
+		}
+		w.WriteHeader(204)
 	})
 }

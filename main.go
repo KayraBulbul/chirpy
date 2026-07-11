@@ -84,6 +84,8 @@ func main() {
 	serverMux.Handle("POST /api/users", apiCfg.createUser())
 	serverMux.Handle("POST /api/login", apiCfg.login())
 	serverMux.Handle("POST /api/chirps", apiCfg.createChirp())
+	serverMux.Handle("POST /api/refresh", apiCfg.validateRefresh())
+	serverMux.Handle("POST /api/revoke", apiCfg.revokeRefresh())
 
 	serverMux.HandleFunc("GET /api/healthz", h1)
 
