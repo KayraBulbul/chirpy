@@ -80,19 +80,23 @@ func (cfg *apiConfig) createChirp() http.Handler {
 		err := decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 500, "Error decoding createChrip body")
+			return
 		}
 
 		token, err := auth.GetBearerToken(r.Header)
 		if err != nil {
 			respondWithError(w, 500, "Error getting bearer token")
+			return
 		}
 		id, err := auth.ValidateJWT(token, cfg.secret)
 		if err != nil {
 			respondWithError(w, 401, "Unauthorized")
+			return
 		}
 
 		if len(params.Body) > 140 {
 			respondWithError(w, 400, "Chirp is too long")
+			return
 		} else {
 			words := strings.Split(params.Body, " ")
 
@@ -115,6 +119,7 @@ func (cfg *apiConfig) createChirp() http.Handler {
 			chirp, err := cfg.dbQueries.CreateChirp(r.Context(), resParams)
 			if err != nil {
 				respondWithError(w, 500, "Error creating chirp")
+				return
 			}
 			respondWithJSON(w, 201, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, id})
 		}
@@ -125,8 +130,7 @@ func (cfg *apiConfig) getChirps() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dbChirps, err := cfg.dbQueries.GetChrips(r.Context())
 		if err != nil {
-			log.Printf("Error retrieving chirps from db: %s", err)
-			w.WriteHeader(500)
+			respondWithError(w, 500, "Error retrieving chirps from database")
 			return
 		}
 		chirps := []Chirp{}
@@ -143,13 +147,12 @@ func (cfg *apiConfig) getChirpByID() http.Handler {
 		idString := r.PathValue("chirpID")
 		id, err := uuid.Parse(idString)
 		if err != nil {
-			log.Printf("Error parsing id: %s", err)
-			w.WriteHeader(500)
+			respondWithError(w, 500, "Error parsing id")
 			return
 		}
 		chirp, err := cfg.dbQueries.GetChirpById(r.Context(), id)
 		if err != nil {
-			w.WriteHeader(404)
+			respondWithError(w, 404, "Chirp not found")
 			return
 		}
 		respondWithJSON(w, 200, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
@@ -175,11 +178,13 @@ func (cfg *apiConfig) createUser() http.Handler {
 		err := decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 500, "Error decoding createUser request body")
+			return
 		}
 
 		hashedPassword, err := auth.HashPassword(params.Password)
 		if err != nil {
 			respondWithError(w, 500, "Error hashing password")
+			return
 		}
 
 		userParams := database.CreateUserParams{
@@ -189,7 +194,6 @@ func (cfg *apiConfig) createUser() http.Handler {
 
 		user, err := cfg.dbQueries.CreateUser(r.Context(), userParams)
 		if err != nil {
-			log.Printf("createUser error: %v", err)
 			respondWithError(w, 500, "Error creating user")
 			return
 		}
@@ -214,24 +218,29 @@ func (cfg *apiConfig) login() http.Handler {
 		err := decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 500, "Error decoding login request body")
+			return
 		}
 
 		user, err := cfg.dbQueries.GetUserByEmail(r.Context(), params.Email)
 		if err != nil {
 			respondWithError(w, 401, "Error getting user from database")
+			return
 		}
 
 		match, err := auth.CheckPasswordHash(params.Password, user.HashedPassword)
 		if err != nil {
 			respondWithError(w, 500, "Error checking password match")
+			return
 		}
 
 		if !match {
 			respondWithError(w, 401, "Unauthorized")
+			return
 		} else {
 			token, err := auth.MakeJWT(user.ID, cfg.secret, time.Hour)
 			if err != nil {
 				respondWithError(w, 500, "Error making JWT token")
+				return
 			}
 			refreshToken := auth.MakeRefreshToken()
 			refreshParams := database.CreateRefreshTokenParams{
@@ -241,6 +250,7 @@ func (cfg *apiConfig) login() http.Handler {
 			_, err = cfg.dbQueries.CreateRefreshToken(r.Context(), refreshParams)
 			if err != nil {
 				respondWithError(w, 500, "Error creating refresh token in database")
+				return
 			}
 			respondWithJSON(w, 200, response{
 				User: User{
@@ -264,17 +274,21 @@ func (cfg *apiConfig) validateRefresh() http.Handler {
 		token, err := auth.GetBearerToken(r.Header)
 		if err != nil {
 			respondWithError(w, 500, "Error getting bearer token")
+			return
 		}
 		refreshToken, err := cfg.dbQueries.GetRefreshByToken(r.Context(), token)
 		if err != nil {
 			respondWithError(w, 401, "Refresh token doesn't exist")
+			return
 		}
 		if refreshToken.RevokedAt.Valid {
 			respondWithError(w, 401, "Refresh token has been revoked")
+			return
 		}
 		accessToken, err := auth.MakeJWT(refreshToken.UserID, cfg.secret, time.Hour)
 		if err != nil {
 			respondWithError(w, 500, "Error making JWT token")
+			return
 		}
 		respondWithJSON(w, 200, response{Token: accessToken})
 	})
@@ -285,15 +299,67 @@ func (cfg *apiConfig) revokeRefresh() http.Handler {
 		token, err := auth.GetBearerToken(r.Header)
 		if err != nil {
 			respondWithError(w, 500, "Error getting bearer token")
+			return
 		}
 		refreshToken, err := cfg.dbQueries.GetRefreshByToken(r.Context(), token)
 		if err != nil {
 			respondWithError(w, 401, "Refresh token doesn't exist")
+			return
 		}
 		err = cfg.dbQueries.RevokeRefreshToken(r.Context(), refreshToken.Token)
 		if err != nil {
 			respondWithError(w, 500, "Error revoking refresh token")
+			return
 		}
 		w.WriteHeader(204)
+	})
+}
+
+func (cfg *apiConfig) updateDetails() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type requestParams struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := requestParams{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			respondWithError(w, 500, "Error decoding")
+			return
+		}
+
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "No bearer token")
+			return
+		}
+
+		userID, err := auth.ValidateJWT(token, cfg.secret)
+		if err != nil {
+			respondWithError(w, 401, "Unable to validate JWT")
+			return
+		}
+
+		hashedPassword, err := auth.HashPassword(params.Password)
+		if err != nil {
+			respondWithError(w, 500, "Error hashing password")
+			return
+		}
+		updatedDetails := database.UpdateUserDetailsParams{
+			Email:          params.Email,
+			HashedPassword: hashedPassword,
+			ID:             userID,
+		}
+		err = cfg.dbQueries.UpdateUserDetails(r.Context(), updatedDetails)
+		if err != nil {
+			respondWithError(w, 500, "Error updating user details")
+			return
+		}
+		respondWithJSON(w, 200, User{
+			ID:    userID,
+			Email: params.Email,
+		})
 	})
 }
