@@ -25,3 +25,8 @@ WHERE id = $3;
 SELECT *
 FROM users
 WHERE id = $1;
+
+-- name: UpgradeToRed :exec
+UPDATE users
+SET is_chirpy_red = true
+WHERE id = $1;

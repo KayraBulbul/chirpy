@@ -20,6 +20,7 @@ type apiConfig struct {
 	dbQueries      *database.Queries
 	platform       string
 	secret         string
+	polkaKey       string
 }
 
 func (cfg *apiConfig) readPlatform() {
@@ -160,10 +161,11 @@ func (cfg *apiConfig) getChirpByID() http.Handler {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 func (cfg *apiConfig) createUser() http.Handler {
@@ -197,7 +199,7 @@ func (cfg *apiConfig) createUser() http.Handler {
 			respondWithError(w, 500, "Error creating user")
 			return
 		}
-		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email})
+		respondWithJSON(w, 201, User{user.ID, user.CreatedAt, user.UpdatedAt, user.Email, false})
 	})
 }
 
@@ -254,10 +256,11 @@ func (cfg *apiConfig) login() http.Handler {
 			}
 			respondWithJSON(w, 200, response{
 				User: User{
-					ID:        user.ID,
-					CreatedAt: user.CreatedAt,
-					UpdatedAt: user.UpdatedAt,
-					Email:     user.Email,
+					ID:          user.ID,
+					CreatedAt:   user.CreatedAt,
+					UpdatedAt:   user.UpdatedAt,
+					Email:       user.Email,
+					IsChirpyRed: user.IsChirpyRed,
 				},
 				Token:        token,
 				RefreshToken: refreshToken,
@@ -399,6 +402,38 @@ func (cfg *apiConfig) deleteChirp() http.Handler {
 				return
 			}
 			respondWithJSON(w, 204, "Chirp successfully deleted")
+		}
+	})
+}
+
+func (cfg *apiConfig) upgradeToRed() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		type dataParams struct {
+			UserID uuid.UUID `json:"user_id"`
+		}
+		type requestParams struct {
+			Event string     `json:"event"`
+			Data  dataParams `json:"data"`
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		params := requestParams{}
+		err := decoder.Decode(&params)
+		if err != nil {
+			respondWithError(w, 500, "Error decoding request")
+			return
+		}
+
+		if params.Event != "user.upgraded" {
+			w.WriteHeader(204)
+			return
+		} else {
+			err = cfg.dbQueries.UpgradeToRed(r.Context(), params.Data.UserID)
+			if err != nil {
+				respondWithError(w, 404, "Cannot find user")
+				return
+			}
+			respondWithJSON(w, 204, "")
 		}
 	})
 }

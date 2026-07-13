@@ -96,6 +96,8 @@ func main() {
 
 	serverMux.Handle("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirp())
 
+	serverMux.Handle("POST /api/polka/webhooks", apiCfg.upgradeToRed())
+
 	server := http.Server{
 		Addr:    ":8080",
 		Handler: serverMux,
