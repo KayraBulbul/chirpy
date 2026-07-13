@@ -1,7 +1,10 @@
 package auth
 
 import (
+	"errors"
+	"net/http"
 	"runtime"
+	"strings"
 
 	"github.com/alexedwards/argon2id"
 )
@@ -27,4 +30,18 @@ func CheckPasswordHash(password, hash string) (bool, error) {
 		return false, err
 	}
 	return match, nil
+}
+
+func GetAPIKey(headers http.Header) (string, error) {
+	authHeader := headers.Get("Authorization")
+	if authHeader == "" {
+		return "", errors.New("could not find authorization header")
+	}
+
+	apiKey, ok := strings.CutPrefix(authHeader, "ApiKey ")
+	if !ok {
+		return "", errors.New("malformed authorization header")
+	}
+
+	return apiKey, nil
 }

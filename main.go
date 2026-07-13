@@ -62,6 +62,7 @@ func main() {
 		log.Fatal("Error opening database")
 	}
 	secret := os.Getenv("SECRET")
+	apiKey := os.Getenv("POLKA_KEY")
 
 	serverMux := http.NewServeMux()
 
@@ -75,7 +76,7 @@ func main() {
 	}
 
 	dbQueries := database.New(db)
-	apiCfg := &apiConfig{dbQueries: dbQueries, secret: secret}
+	apiCfg := &apiConfig{dbQueries: dbQueries, secret: secret, polkaKey: apiKey}
 
 	serverMux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
 	serverMux.Handle("GET /admin/metrics", apiCfg.getHits())

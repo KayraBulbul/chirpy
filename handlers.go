@@ -415,10 +415,19 @@ func (cfg *apiConfig) upgradeToRed() http.Handler {
 			Event string     `json:"event"`
 			Data  dataParams `json:"data"`
 		}
+		ApiKey, err := auth.GetAPIKey(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Error with API key")
+			return
+		}
+		if ApiKey != cfg.polkaKey {
+			w.WriteHeader(401)
+			return
+		}
 
 		decoder := json.NewDecoder(r.Body)
 		params := requestParams{}
-		err := decoder.Decode(&params)
+		err = decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 500, "Error decoding request")
 			return
