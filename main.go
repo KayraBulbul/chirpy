@@ -94,6 +94,8 @@ func main() {
 	serverMux.Handle("GET /api/chirps", apiCfg.getChirps())
 	serverMux.Handle("GET /api/chirps/{chirpID}", apiCfg.getChirpByID())
 
+	serverMux.Handle("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirp())
+
 	server := http.Server{
 		Addr:    ":8080",
 		Handler: serverMux,

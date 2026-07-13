@@ -363,3 +363,42 @@ func (cfg *apiConfig) updateDetails() http.Handler {
 		})
 	})
 }
+
+func (cfg *apiConfig) deleteChirp() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idString := r.PathValue("chirpID")
+		token, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "No bearer token")
+			return
+		}
+		userID, err := auth.ValidateJWT(token, cfg.secret)
+		if err != nil {
+			respondWithError(w, 500, "Error validating JWT")
+			return
+		}
+
+		chirpID, err := uuid.Parse(idString)
+		if err != nil {
+			respondWithError(w, 500, "Error parsing chirpId")
+			return
+		}
+		chirp, err := cfg.dbQueries.GetChirpById(r.Context(), chirpID)
+		if err != nil {
+			respondWithError(w, 404, "Chirp not found")
+			return
+		}
+
+		if chirp.UserID != userID {
+			respondWithError(w, 403, "Unauthorized user")
+			return
+		} else {
+			err = cfg.dbQueries.DeleteChirp(r.Context(), chirpID)
+			if err != nil {
+				respondWithError(w, 500, "Error deleting chirp")
+				return
+			}
+			respondWithJSON(w, 204, "Chirp successfully deleted")
+		}
+	})
+}
