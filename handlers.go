@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -129,17 +130,55 @@ func (cfg *apiConfig) createChirp() http.Handler {
 
 func (cfg *apiConfig) getChirps() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		dbChirps, err := cfg.dbQueries.GetChrips(r.Context())
-		if err != nil {
-			respondWithError(w, 500, "Error retrieving chirps from database")
-			return
-		}
-		chirps := []Chirp{}
-		for _, chirp := range dbChirps {
-			chirps = append(chirps, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
-		}
+		s := r.URL.Query().Get("author_id")
+		sorting := r.URL.Query().Get("sort")
 
-		respondWithJSON(w, 200, chirps)
+		if len(s) > 0 {
+			authorID, err := uuid.Parse(s)
+			if err != nil {
+				respondWithError(w, 500, "Error parsing author id")
+				return
+			}
+			dbChirps, err := cfg.dbQueries.GetChirpsByAuthorId(r.Context(), authorID)
+			if err != nil {
+				respondWithError(w, 500, "Error retrieving chirps from database")
+				return
+			}
+			chirps := []Chirp{}
+			for _, chirp := range dbChirps {
+				chirps = append(chirps, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+			}
+			if sorting == "asc" || len(sorting) == 0 {
+				sort.Slice(chirps, func(i, j int) bool {
+					return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+				})
+			} else {
+				sort.Slice(chirps, func(i, j int) bool {
+					return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+				})
+			}
+			respondWithJSON(w, 200, chirps)
+		} else {
+			dbChirps, err := cfg.dbQueries.GetChrips(r.Context())
+			if err != nil {
+				respondWithError(w, 500, "Error retrieving chirps from database")
+				return
+			}
+			chirps := []Chirp{}
+			for _, chirp := range dbChirps {
+				chirps = append(chirps, Chirp{chirp.ID, chirp.CreatedAt, chirp.UpdatedAt, chirp.Body, chirp.UserID})
+			}
+			if sorting == "asc" || len(sorting) == 0 {
+				sort.Slice(chirps, func(i, j int) bool {
+					return chirps[i].CreatedAt.Before(chirps[j].CreatedAt)
+				})
+			} else {
+				sort.Slice(chirps, func(i, j int) bool {
+					return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+				})
+			}
+			respondWithJSON(w, 200, chirps)
+		}
 	})
 }
 
